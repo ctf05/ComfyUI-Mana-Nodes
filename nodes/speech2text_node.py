@@ -3,6 +3,7 @@ from transformers import Wav2Vec2Processor, Wav2Vec2ForCTC
 import torch
 import requests
 import json
+import numpy as np
 
 class speech2text:
 
@@ -17,13 +18,16 @@ class speech2text:
         transcription_mode = ["word","line","fill"]
         return {
             "required": {
-                "audio_file": ("STRING", {"display": "text","forceInput": True}),
                 "wav2vec2_model": (cls.get_wav2vec2_models(), {"display": "dropdown", "default": "jonatasgrosman/wav2vec2-large-xlsr-53-english"}),
                 "spell_check_language": (spell_check_options, {"default": "English", "display": "dropdown"}),
                 "framestamps_max_chars": ("INT", {"default": 25, "step": 1, "display": "number"}),
                 "fps": ("INT", {"default": 30, "min": 1, "max": 60, "step": 1}),
                 "transcription_mode": (transcription_mode, {"default": "fill", "display": "dropdown"}),
                 "uppercase": ("BOOLEAN", {"default": True})
+            },
+            "optional": {
+                "audio_file": ("STRING", {"display": "text","forceInput": True}),
+                "audio": ("AUDIO", {"forceInput": True}),
             }          
         }
 
@@ -33,10 +37,39 @@ class speech2text:
     FUNCTION = "run"
     OUTPUT_NODE = True
 
-    def run(self, audio_file, wav2vec2_model, spell_check_language,framestamps_max_chars,**kwargs):
+    def run(self, wav2vec2_model, spell_check_language, framestamps_max_chars, audio_file=None, audio=None, **kwargs):
         fps = kwargs.get('fps',30)
+        
+        # Handle audio input - either from file path or audio data
+        if audio is not None:
+            # If audio data is provided directly (from load audio node)
+            # Extract the waveform and sample rate
+            if isinstance(audio, dict) and 'waveform' in audio and 'sample_rate' in audio:
+                waveform = audio['waveform']
+                sample_rate = audio['sample_rate']
+                
+                # Convert to mono if stereo and flatten
+                if len(waveform.shape) > 1:
+                    if waveform.shape[0] > 1:  # Multiple channels
+                        audio_array = np.mean(waveform.cpu().numpy(), axis=0)
+                    else:
+                        audio_array = waveform[0].cpu().numpy()
+                else:
+                    audio_array = waveform.cpu().numpy()
+                
+                # Resample to 16kHz if needed
+                if sample_rate != 16000:
+                    audio_array = librosa.resample(audio_array, orig_sr=sample_rate, target_sr=16000)
+            else:
+                raise ValueError("Invalid audio format. Expected dict with 'waveform' and 'sample_rate'")
+                
+        elif audio_file is not None:
+            # If file path is provided
+            audio_array = self.audiofile_to_numpy(audio_file)
+        else:
+            raise ValueError("Either 'audio_file' or 'audio' must be provided")
+        
         # Load and process with Wav2Vec2 model
-        audio_array = self.audiofile_to_numpy(audio_file)
         raw_transcription = self.transcribe_with_timestamps(audio_array, wav2vec2_model)
 
         # Correct with spell checker
@@ -223,7 +256,8 @@ class speech2text:
 
         return word_timestamps
     
-    def get_wav2vec2_models():
+    @classmethod
+    def get_wav2vec2_models(cls):
         # Query Hugging Face Models API for Wav2Vec2 models
         url = "https://huggingface.co/api/models?search=wav2vec2"
         response = requests.get(url)
@@ -242,4 +276,3 @@ class speech2text:
         except Exception as e:
             print("Error loading audio file:", e)
             return None
-        
