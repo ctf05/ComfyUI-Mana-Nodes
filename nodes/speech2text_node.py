@@ -42,27 +42,7 @@ class speech2text:
         
         # Handle audio input - either from file path or audio data
         if audio is not None:
-            # If audio data is provided directly (from load audio node)
-            # Extract the waveform and sample rate
-            if isinstance(audio, dict) and 'waveform' in audio and 'sample_rate' in audio:
-                waveform = audio['waveform']
-                sample_rate = audio['sample_rate']
-                
-                # Convert to mono if stereo and flatten
-                if len(waveform.shape) > 1:
-                    if waveform.shape[0] > 1:  # Multiple channels
-                        audio_array = np.mean(waveform.cpu().numpy(), axis=0)
-                    else:
-                        audio_array = waveform[0].cpu().numpy()
-                else:
-                    audio_array = waveform.cpu().numpy()
-                
-                # Resample to 16kHz if needed
-                if sample_rate != 16000:
-                    audio_array = librosa.resample(audio_array, orig_sr=sample_rate, target_sr=16000)
-            else:
-                raise ValueError("Invalid audio format. Expected dict with 'waveform' and 'sample_rate'")
-                
+            audio_array = self.process_audio_input(audio)
         elif audio_file is not None:
             # If file path is provided
             audio_array = self.audiofile_to_numpy(audio_file)
@@ -95,6 +75,135 @@ class speech2text:
         }
 
         return (settings_dict, raw_transcription_string,frame_structure_transcription,json,)
+
+    def process_audio_input(self, audio):
+        """
+        Process various audio input formats and convert to numpy array at 16kHz
+        Handles multiple possible formats from different ComfyUI audio nodes
+        """
+        
+        # Format 1: Dict with 'waveform' and 'sample_rate' (original format)
+        if isinstance(audio, dict):
+            if 'waveform' in audio and 'sample_rate' in audio:
+                waveform = audio['waveform']
+                sample_rate = audio['sample_rate']
+                
+                # Convert to mono if stereo and flatten
+                if isinstance(waveform, torch.Tensor):
+                    if len(waveform.shape) > 1:
+                        if waveform.shape[0] > 1:  # Multiple channels
+                            audio_array = np.mean(waveform.cpu().numpy(), axis=0)
+                        else:
+                            audio_array = waveform[0].cpu().numpy()
+                    else:
+                        audio_array = waveform.cpu().numpy()
+                else:
+                    audio_array = np.array(waveform)
+                
+                # Resample to 16kHz if needed
+                if sample_rate != 16000:
+                    audio_array = librosa.resample(audio_array, orig_sr=sample_rate, target_sr=16000)
+                
+                return audio_array
+                
+            # Format 2: Dict with 'audio' and 'sampling_rate' (Video Helper Suite format)
+            elif 'audio' in audio and 'sampling_rate' in audio:
+                waveform = audio['audio']
+                sample_rate = audio['sampling_rate']
+                
+                # Process similar to above
+                if isinstance(waveform, torch.Tensor):
+                    if len(waveform.shape) > 1:
+                        if waveform.shape[0] > 1:
+                            audio_array = np.mean(waveform.cpu().numpy(), axis=0)
+                        else:
+                            audio_array = waveform[0].cpu().numpy()
+                    else:
+                        audio_array = waveform.cpu().numpy()
+                else:
+                    audio_array = np.array(waveform)
+                
+                if sample_rate != 16000:
+                    audio_array = librosa.resample(audio_array, orig_sr=sample_rate, target_sr=16000)
+                
+                return audio_array
+            
+            # Format 3: Dict with just 'samples' (some nodes use this)
+            elif 'samples' in audio:
+                waveform = audio['samples']
+                # Assume 48kHz if no sample rate provided (common default)
+                sample_rate = audio.get('sample_rate', 48000)
+                
+                if isinstance(waveform, torch.Tensor):
+                    audio_array = waveform.cpu().numpy()
+                else:
+                    audio_array = np.array(waveform)
+                
+                # Handle multi-channel
+                if len(audio_array.shape) > 1:
+                    audio_array = np.mean(audio_array, axis=0)
+                
+                if sample_rate != 16000:
+                    audio_array = librosa.resample(audio_array, orig_sr=sample_rate, target_sr=16000)
+                
+                return audio_array
+                
+        # Format 4: Direct tensor (some nodes output just the tensor)
+        elif isinstance(audio, torch.Tensor):
+            # Assume 48kHz sample rate as default
+            audio_array = audio.cpu().numpy()
+            
+            # Handle multi-channel
+            if len(audio_array.shape) > 1:
+                audio_array = np.mean(audio_array, axis=0)
+            
+            # Resample from assumed 48kHz to 16kHz
+            audio_array = librosa.resample(audio_array, orig_sr=48000, target_sr=16000)
+            return audio_array
+            
+        # Format 5: Numpy array
+        elif isinstance(audio, np.ndarray):
+            # Handle multi-channel
+            if len(audio.shape) > 1:
+                audio_array = np.mean(audio, axis=0)
+            else:
+                audio_array = audio
+            
+            # Assume needs resampling to 16kHz from 48kHz
+            audio_array = librosa.resample(audio_array, orig_sr=48000, target_sr=16000)
+            return audio_array
+            
+        # Format 6: Tuple of (waveform, sample_rate)
+        elif isinstance(audio, tuple) and len(audio) == 2:
+            waveform, sample_rate = audio
+            
+            if isinstance(waveform, torch.Tensor):
+                audio_array = waveform.cpu().numpy()
+            else:
+                audio_array = np.array(waveform)
+            
+            # Handle multi-channel
+            if len(audio_array.shape) > 1:
+                audio_array = np.mean(audio_array, axis=0)
+            
+            if sample_rate != 16000:
+                audio_array = librosa.resample(audio_array, orig_sr=sample_rate, target_sr=16000)
+            
+            return audio_array
+        
+        else:
+            # If we can't determine the format, try to extract any numeric data
+            try:
+                audio_array = np.array(audio, dtype=np.float32)
+                if len(audio_array.shape) > 1:
+                    audio_array = np.mean(audio_array, axis=0)
+                # Assume 48kHz and resample to 16kHz
+                audio_array = librosa.resample(audio_array, orig_sr=48000, target_sr=16000)
+                return audio_array
+            except:
+                raise ValueError(f"Unsupported audio format. Got type: {type(audio)}. "
+                               "Expected dict with 'waveform'/'audio' and 'sample_rate'/'sampling_rate', "
+                               "torch.Tensor, numpy array, or tuple of (waveform, sample_rate)")
 
     def transcription_to_string(self, raw_transcription):
         # Convert a list of (word, start_time, end_time) tuples to a string
@@ -259,13 +368,26 @@ class speech2text:
     @classmethod
     def get_wav2vec2_models(cls):
         # Query Hugging Face Models API for Wav2Vec2 models
-        url = "https://huggingface.co/api/models?search=wav2vec2"
-        response = requests.get(url)
-        models = response.json()
-
-        # Extract model names
-        model_names = [model['modelId'] for model in models]
-        return model_names
+        try:
+            url = "https://huggingface.co/api/models?search=wav2vec2"
+            response = requests.get(url, timeout=5)
+            models = response.json()
+            
+            # Extract model names
+            model_names = [model['modelId'] for model in models if 'modelId' in model]
+            
+            # If no models found or error, return default list
+            if not model_names:
+                return ["jonatasgrosman/wav2vec2-large-xlsr-53-english", 
+                        "facebook/wav2vec2-base-960h",
+                        "facebook/wav2vec2-large-960h-lv60-self"]
+            
+            return model_names
+        except:
+            # Return default models if API fails
+            return ["jonatasgrosman/wav2vec2-large-xlsr-53-english", 
+                    "facebook/wav2vec2-base-960h",
+                    "facebook/wav2vec2-large-960h-lv60-self"]
     
     
     @staticmethod
