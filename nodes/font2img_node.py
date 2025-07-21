@@ -4,7 +4,6 @@ import PIL
 import numpy as np
 import torch
 from torchvision import transforms
-from matplotlib import font_manager
 import re
 
 class font2img:
@@ -14,11 +13,6 @@ class font2img:
 
     def __init__(self):
         pass
-
-    @classmethod
-    def system_font_names(self):
-        mgr = font_manager.FontManager()
-        return {font.name: font.fname for font in mgr.ttflist}
 
     @classmethod
     def get_font_files(self, font_dir):
@@ -38,15 +32,12 @@ class font2img:
     
     @classmethod
     def combined_font_list(self):
-        system_fonts = self.system_font_names()
         custom_font_files = self.setup_font_directories()
-
+        
         # Create a dictionary for custom fonts mapping font file base names to their paths
         custom_fonts = {os.path.splitext(os.path.basename(f))[0]: f for f in custom_font_files}
-
-        # Merge system_fonts and custom_fonts dictionaries
-        all_fonts = {**system_fonts, **custom_fonts}
-        return all_fonts
+        
+        return custom_fonts
     
     def get_font(self, font_name, font_size) -> ImageFont.FreeTypeFont:
         font_file = self.FONTS[font_name]
@@ -57,6 +48,15 @@ class font2img:
 
         self.FONTS = self.combined_font_list()
         self.FONT_NAMES = sorted(self.FONTS.keys())
+        
+        # Ensure at least one font is available
+        if not self.FONT_NAMES:
+            script_dir = os.path.dirname(os.path.dirname(__file__))
+            font_dirs = [os.path.join(script_dir, 'font'), os.path.join(script_dir, 'font_files')]
+            raise RuntimeError(
+                f"No fonts found! Please add .ttf, .otf, .woff, or .woff2 files to: {font_dirs}"
+            )
+        
         return {
             "required": {
                 "font": ("TEXT_GRAPHIC_ELEMENT", {"default": None,"forceInput": True}),
