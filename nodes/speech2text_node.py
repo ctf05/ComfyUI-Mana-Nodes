@@ -82,6 +82,54 @@ class speech2text:
         Handles multiple possible formats from different ComfyUI audio nodes
         """
         
+        # Check if it's a Video Helper Suite LazyAudioMap object
+        if hasattr(audio, '__class__') and 'LazyAudioMap' in str(audio.__class__):
+            # Try to access the audio data from LazyAudioMap
+            # LazyAudioMap typically has methods to get the actual audio data
+            if hasattr(audio, 'get_audio'):
+                audio_data = audio.get_audio()
+            elif hasattr(audio, 'audio'):
+                audio_data = audio.audio
+            elif hasattr(audio, '__getitem__'):
+                # Try to get audio and sample rate by index or key
+                try:
+                    if hasattr(audio, 'keys') and callable(audio.keys):
+                        keys = list(audio.keys())
+                        if 'audio' in keys and 'sample_rate' in keys:
+                            audio_data = {'audio': audio['audio'], 'sample_rate': audio['sample_rate']}
+                        elif 'waveform' in keys and 'sample_rate' in keys:
+                            audio_data = {'waveform': audio['waveform'], 'sample_rate': audio['sample_rate']}
+                        else:
+                            # Try first available key
+                            audio_data = audio[keys[0]] if keys else audio
+                    else:
+                        # Try index access
+                        audio_data = audio[0]
+                except:
+                    # Try to convert to dict
+                    try:
+                        audio_data = dict(audio)
+                    except:
+                        # Last resort - try to get any callable method that might return audio
+                        for attr in dir(audio):
+                            if not attr.startswith('_'):
+                                try:
+                                    val = getattr(audio, attr)
+                                    if callable(val):
+                                        result = val()
+                                        if isinstance(result, (dict, tuple, torch.Tensor, np.ndarray)):
+                                            audio_data = result
+                                            break
+                                except:
+                                    continue
+                        else:
+                            raise ValueError(f"Could not extract audio data from LazyAudioMap object")
+            else:
+                raise ValueError(f"LazyAudioMap object doesn't have expected methods/attributes")
+            
+            # Now process the extracted audio_data recursively
+            return self.process_audio_input(audio_data)
+        
         # Format 1: Dict with 'waveform' and 'sample_rate' (original format)
         if isinstance(audio, dict):
             if 'waveform' in audio and 'sample_rate' in audio:
